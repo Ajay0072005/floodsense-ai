@@ -16,10 +16,100 @@ app.use(cors());
 app.use(express.json());
 
 const AI_CORTEX_URL = process.env.AI_CORTEX_URL || 'http://localhost:8000';
+const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || '';
+
+// In-memory OTP store (key: phone, value: { otp, expiresAt })
+const otpStore = new Map<string, { otp: string; expiresAt: number }>();
 
 // ─── Health ─────────────────────────────────────────
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', service: 'FloodSense Core API v2.0', ai_cortex: AI_CORTEX_URL });
+    res.json({ status: 'ok', service: 'FloodSense Core API v2.0', ai_cortex: AI_CORTEX_URL, sms: FAST2SMS_API_KEY ? 'configured' : 'not configured' });
+});
+
+// ─── OTP Send (Real SMS via Fast2SMS) ───────────────
+app.post('/auth/send-otp', async (req, res) => {
+    const { phone } = req.body;
+    if(!phone || phone.length < 10) {
+        return res.status(400).json({ status: 'error', message: 'Invalid phone number' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const cleanPhone = phone.replace(/\D/g, '').slice(-10); // Last 10 digits
+
+    // Store OTP with 5-minute expiry
+    otpStore.set(cleanPhone, { otp, expiresAt: Date.now() + 5 * 60 * 1000 });
+
+    // Clean up expired OTPs
+    for(const [key, val] of otpStore.entries()) {
+        if(val.expiresAt < Date.now()) otpStore.delete(key);
+    }
+
+    if(!FAST2SMS_API_KEY) {
+        // No API key — return OTP in response for testing
+        console.log(`[OTP] No Fast2SMS key. OTP for ${cleanPhone}: ${otp}`);
+        return res.json({ status: 'success', message: 'OTP generated (demo mode - no SMS key configured)', demo_otp: otp });
+    }
+
+    // Send via Fast2SMS
+    try {
+        const smsResp = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+            method: 'POST',
+            headers: {
+                'authorization': FAST2SMS_API_KEY,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                route: 'otp',
+                variables_values: otp,
+                numbers: cleanPhone,
+                flash: 0,
+            }),
+        });
+
+        const smsData: any = await smsResp.json();
+
+        if(smsData.return === true) {
+            console.log(`[OTP] SMS sent to ${cleanPhone} via Fast2SMS`);
+            return res.json({ status: 'success', message: `OTP sent to +91 ${cleanPhone}` });
+        } else {
+            console.error(`[OTP] Fast2SMS error:`, smsData);
+            // Fallback: return OTP in response
+            return res.json({ status: 'success', message: 'SMS delivery failed, showing OTP', demo_otp: otp });
+        }
+    } catch(err) {
+        console.error(`[OTP] SMS send error:`, err);
+        return res.json({ status: 'success', message: 'SMS service error, showing OTP', demo_otp: otp });
+    }
+});
+
+// ─── OTP Verify ─────────────────────────────────────
+app.post('/auth/verify-otp', (req, res) => {
+    const { phone, otp } = req.body;
+    if(!phone || !otp) {
+        return res.status(400).json({ status: 'error', message: 'Phone and OTP required' });
+    }
+
+    const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+    const stored = otpStore.get(cleanPhone);
+
+    if(!stored) {
+        return res.status(400).json({ status: 'error', message: 'No OTP found. Please request a new one.' });
+    }
+
+    if(stored.expiresAt < Date.now()) {
+        otpStore.delete(cleanPhone);
+        return res.status(400).json({ status: 'error', message: 'OTP expired. Please request a new one.' });
+    }
+
+    if(stored.otp !== otp) {
+        return res.status(400).json({ status: 'error', message: 'Invalid OTP. Please try again.' });
+    }
+
+    // OTP verified — remove from store
+    otpStore.delete(cleanPhone);
+    const token = Buffer.from(cleanPhone + Date.now()).toString('base64');
+    return res.json({ status: 'success', message: 'OTP verified', token, user: { phone: cleanPhone } });
 });
 
 // ─── Auth (keep existing) ───────────────────────────

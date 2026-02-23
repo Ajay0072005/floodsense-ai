@@ -37,20 +37,39 @@ export default function AuthPage({ onLogin }: AuthFormProps) {
         return () => clearTimeout(t);
     }, [resendTimer]);
 
-    const handleSendOtp = () => {
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
+    const handleSendOtp = async () => {
         if(phone.length < 10) return;
         setLoading(true);
-        const code = String(Math.floor(100000 + Math.random() * 900000));
-        setGeneratedOtp(code);
-        // Simulate OTP send delay
-        setTimeout(() => {
+        setVerifyError("");
+        try {
+            const resp = await fetch(`${API_BASE}/auth/send-otp`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone }),
+            });
+            const data = await resp.json();
+            if(data.status === 'success') {
+                setOtpSent(true);
+                setResendTimer(30);
+                // If backend returns demo_otp (no SMS key), show it on screen
+                if(data.demo_otp) {
+                    setGeneratedOtp(data.demo_otp);
+                } else {
+                    setGeneratedOtp(""); // Real SMS sent — don't show on screen
+                }
+            } else {
+                setVerifyError(data.message || "Failed to send OTP");
+            }
+        } catch {
+            // Backend offline — fallback to client-side OTP
+            const code = String(Math.floor(100000 + Math.random() * 900000));
+            setGeneratedOtp(code);
             setOtpSent(true);
             setResendTimer(30);
-            setLoading(false);
-            setVerifyError("");
-            // Show OTP in console for testing
-            console.log(`[FloodSense OTP] Code sent to +91 ${phone}: ${code}`);
-        }, 1500);
+        }
+        setLoading(false);
     };
 
     const handleOtpChange = (index: number, value: string) => {
@@ -79,19 +98,31 @@ export default function AuthPage({ onLogin }: AuthFormProps) {
         }
     };
 
-    const handleVerifyOtp = () => {
+    const handleVerifyOtp = async () => {
         const entered = otp.join("");
         if(entered.length < 6) { setVerifyError("Enter all 6 digits"); return; }
         setLoading(true);
-        setTimeout(() => {
-            if(entered === generatedOtp) {
+        try {
+            const resp = await fetch(`${API_BASE}/auth/verify-otp`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, otp: entered }),
+            });
+            const data = await resp.json();
+            if(data.status === 'success') {
                 setOtpVerified(true);
-                setLoading(false);
             } else {
-                setVerifyError("Invalid OTP. Please try again.");
-                setLoading(false);
+                setVerifyError(data.message || "Invalid OTP");
             }
-        }, 1000);
+        } catch {
+            // Backend offline — fallback to client-side verification
+            if(generatedOtp && entered === generatedOtp) {
+                setOtpVerified(true);
+            } else {
+                setVerifyError("Cannot verify — server offline. Try the displayed OTP.");
+            }
+        }
+        setLoading(false);
     };
 
     const handleLogin = () => {
@@ -196,12 +227,15 @@ export default function AuthPage({ onLogin }: AuthFormProps) {
                                         <CheckCircle className="w-4 h-4 text-green-600" />
                                         <span className="text-xs text-green-700">OTP sent to <strong>+91 {phone}</strong></span>
                                     </div>
-                                    {/* Show simulated OTP visibly */}
-                                    <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg px-4 py-3 text-center">
+                                    {/* Show simulated OTP when backend returns demo_otp or offline */}
+                                    {generatedOtp && <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg px-4 py-3 text-center">
                                         <p className="text-[10px] text-yellow-700 font-bold uppercase tracking-wide mb-1">📩 Simulated SMS (Demo Mode)</p>
                                         <p className="text-2xl font-black tracking-[0.3em] text-[#1a237e]">{generatedOtp}</p>
-                                        <p className="text-[9px] text-yellow-600 mt-1">In production, this would be sent via SMS gateway</p>
-                                    </div>
+                                        <p className="text-[9px] text-yellow-600 mt-1">In production, this is sent via SMS to your phone</p>
+                                    </div>}
+                                    {!generatedOtp && <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 text-center">
+                                        📱 Check your phone for the 6-digit OTP
+                                    </div>}
 
                                     {/* 6-digit OTP Input */}
                                     <div>
