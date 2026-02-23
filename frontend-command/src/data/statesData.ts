@@ -167,6 +167,20 @@ export function getDangerDams(): (DamData & { district: string; state: string })
     return getAllDams().filter(d => d.status === "DANGER" || d.status === "OVERFLOW");
 }
 
+export function getDamsByState(stateName: string): (DamData & { district: string; state: string })[] {
+    const st = STATES_DATA.find(s => s.name === stateName);
+    if(!st) return [];
+    return st.districts.flatMap(d =>
+        (d.nearbyDams || []).map(dam => ({ ...dam, district: d.name, state: stateName }))
+    );
+}
+
+export function getVulnerableByState(stateName: string): (DistrictData & { stateName: string })[] {
+    const st = STATES_DATA.find(s => s.name === stateName);
+    if(!st) return [];
+    return st.districts.map(d => ({ ...d, stateName })).sort((a, b) => b.vulnerability.vulnerability_score - a.vulnerability.vulnerability_score);
+}
+
 export function getStateRiskSummary(state: StateData | string) {
     const s = typeof state === 'string' ? STATES_DATA.find(st => st.name === state) : state;
     if(!s) return { highCount: 0, moderateCount: 0, lowCount: 0, avgRisk: 0, totalPop: 0, totalShelters: 0 };
