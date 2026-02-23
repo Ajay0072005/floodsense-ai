@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
     AlertTriangle, MapPin, Bell, Navigation, Globe, Phone,
     Droplets, ChevronRight, Shield, LogOut, ArrowLeft, X,
-    Siren, BarChart3, TrendingUp, Users
+    Siren, BarChart3, TrendingUp, Users, Loader2
 } from "lucide-react";
 import { STATES_DATA, getHighRiskDistricts, getStateRiskSummary, type StateData, type DistrictData } from "@/data/statesData";
+import { fetchRiskPrediction, fetchWeatherDirect, type RiskPrediction, type FloodAlert } from "@/lib/api";
 
 type View = "home" | "map" | "evacuate" | "shelters" | "sos" | "alert-family" | "state-analysis" | "district-detail";
 
@@ -18,6 +19,29 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     const [selectedDistrict, setSelectedDistrict] = useState<(DistrictData & { stateName?: string }) | null>(null);
     const [sosSent, setSosSent] = useState(false);
     const [familyAlerted, setFamilyAlerted] = useState(false);
+    const [liveRisk, setLiveRisk] = useState<RiskPrediction | null>(null);
+    const [liveAlerts, setLiveAlerts] = useState<FloodAlert[]>([]);
+    const [loadingRisk, setLoadingRisk] = useState(true);
+
+    // Fetch live risk data on mount
+    useEffect(() => {
+        async function loadRisk() {
+            try {
+                // Default to Delhi; in production, use GPS
+                const data = await fetchRiskPrediction(28.6139, 77.2090, "Delhi", "Delhi");
+                setLiveRisk(data);
+                if(data.alerts) setLiveAlerts(data.alerts);
+            } catch(e) {
+                console.error("Failed to fetch live risk:", e);
+            } finally {
+                setLoadingRisk(false);
+            }
+        }
+        loadRisk();
+        // Refresh every 5 minutes
+        const interval = setInterval(loadRisk, 5 * 60 * 1000);
+        return () => clearInterval(interval);
+    }, []);
 
     const languages = [
         "English", "हिन्दी", "বাংলা", "తెలుగు", "தமிழ்", "मराठी",
@@ -29,13 +53,21 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     const highRiskDistricts = getHighRiskDistricts().slice(0, 5);
 
     const riskColor = (level: string) =>
-        level === "HIGH" ? "red" : level === "MODERATE" ? "amber" : "green";
+        level === "HIGH" || level === "SEVERE" ? "red" : level === "MODERATE" ? "amber" : "green";
 
-    const alertItems = [
-        { severity: "HIGH", time: "2 min ago", msg: "Heavy rainfall expected in your area. Seek higher ground immediately.", color: "red" },
-        { severity: "MODERATE", time: "15 min ago", msg: "Water levels rising in Yamuna East Bank. Prepare emergency kit.", color: "amber" },
-        { severity: "LOW", time: "1 hr ago", msg: "Light showers expected in the evening. No immediate risk.", color: "green" },
-    ];
+    // Use live alerts if available, fallback to static
+    const alertItems = liveAlerts.length > 0
+        ? liveAlerts.map(a => ({
+            severity: a.severity,
+            time: new Date(a.timestamp).toLocaleTimeString(),
+            msg: a.message,
+            color: a.severity === "HIGH" || a.severity === "SEVERE" ? "red" : a.severity === "MODERATE" ? "amber" : "green",
+        }))
+        : [
+            { severity: "HIGH", time: "2 min ago", msg: "Heavy rainfall expected. Seek higher ground.", color: "red" },
+            { severity: "MODERATE", time: "15 min ago", msg: "Water levels rising. Prepare emergency kit.", color: "amber" },
+            { severity: "LOW", time: "1 hr ago", msg: "Light showers expected. No immediate risk.", color: "green" },
+        ];
 
     // ─── HEADER ───
     const Header = ({ title, showBack }: { title?: string; showBack?: boolean }) => (
@@ -76,7 +108,7 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     );
 
     // ─── EVACUATE VIEW ───
-    if (view === "evacuate") {
+    if(view === "evacuate") {
         return (
             <div className="min-h-screen bg-slate-950 text-slate-100">
                 <Header title="Evacuation Route" showBack />
@@ -113,7 +145,7 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     }
 
     // ─── SHELTERS VIEW ───
-    if (view === "shelters") {
+    if(view === "shelters") {
         return (
             <div className="min-h-screen bg-slate-950 text-slate-100">
                 <Header title="Nearby Shelters" showBack />
@@ -146,7 +178,7 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     }
 
     // ─── SOS VIEW ───
-    if (view === "sos") {
+    if(view === "sos") {
         return (
             <div className="min-h-screen bg-slate-950 text-slate-100">
                 <Header title="Emergency SOS" showBack />
@@ -201,7 +233,7 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     }
 
     // ─── ALERT FAMILY VIEW ───
-    if (view === "alert-family") {
+    if(view === "alert-family") {
         return (
             <div className="min-h-screen bg-slate-950 text-slate-100">
                 <Header title="Alert Family" showBack />
@@ -248,7 +280,7 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     }
 
     // ─── STATE ANALYSIS VIEW ───
-    if (view === "state-analysis") {
+    if(view === "state-analysis") {
         return (
             <div className="min-h-screen bg-slate-950 text-slate-100">
                 <Header title="State & District Analysis" showBack />
@@ -352,7 +384,7 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     }
 
     // ─── DISTRICT DETAIL VIEW ───
-    if (view === "district-detail" && selectedDistrict) {
+    if(view === "district-detail" && selectedDistrict) {
         const d = selectedDistrict;
         return (
             <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -410,7 +442,7 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
     }
 
     // ─── MAP VIEW ───
-    if (view === "map") {
+    if(view === "map") {
         return (
             <div className="min-h-screen bg-slate-950 text-slate-100">
                 <Header title="Flood Risk Map" showBack />
@@ -444,23 +476,52 @@ export default function CitizenDashboard({ onLogout }: { onLogout: () => void })
         <div className="min-h-screen bg-slate-950 text-slate-100">
             <Header />
             <div className="max-w-lg mx-auto px-4 py-5 space-y-5">
-                {/* Risk Status Card */}
-                <div className="bg-gradient-to-br from-red-500/15 to-red-900/10 rounded-2xl border border-red-500/20 p-5">
-                    <div className="flex items-center gap-3 mb-3">
-                        <div className="relative">
-                            <span className="absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-40 animate-ping"></span>
-                            <span className="relative inline-flex w-4 h-4 rounded-full bg-red-500"></span>
-                        </div>
-                        <div>
-                            <h2 className="text-lg font-bold text-red-300">🚨 HIGH RISK ZONE</h2>
-                            <p className="text-xs text-red-400/70">Your current location • Updated 2 min ago</p>
-                        </div>
+                {/* Risk Status Card — LIVE DATA */}
+                {loadingRisk ? (
+                    <div className="bg-slate-900/60 rounded-2xl border border-slate-700/30 p-5 flex items-center justify-center gap-3">
+                        <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+                        <span className="text-sm text-slate-400">Analyzing live weather data...</span>
                     </div>
-                    <p className="text-sm text-slate-300 leading-relaxed">
-                        Flash flood probability <span className="text-red-400 font-bold">87%</span> in your district.
-                        Water levels rising rapidly. Move to higher ground.
-                    </p>
-                </div>
+                ) : (
+                    <div className={`bg-gradient-to-br rounded-2xl border p-5 ${(liveRisk?.riskLevel === 'HIGH' || liveRisk?.riskLevel === 'SEVERE') ? 'from-red-500/15 to-red-900/10 border-red-500/20' :
+                            liveRisk?.riskLevel === 'MODERATE' ? 'from-amber-500/15 to-amber-900/10 border-amber-500/20' :
+                                'from-green-500/15 to-green-900/10 border-green-500/20'
+                        }`}>
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className="relative">
+                                <span className={`absolute inline-flex h-full w-full rounded-full opacity-40 animate-ping ${(liveRisk?.riskLevel === 'HIGH' || liveRisk?.riskLevel === 'SEVERE') ? 'bg-red-500' :
+                                        liveRisk?.riskLevel === 'MODERATE' ? 'bg-amber-500' : 'bg-green-500'
+                                    }`}></span>
+                                <span className={`relative inline-flex w-4 h-4 rounded-full ${(liveRisk?.riskLevel === 'HIGH' || liveRisk?.riskLevel === 'SEVERE') ? 'bg-red-500' :
+                                        liveRisk?.riskLevel === 'MODERATE' ? 'bg-amber-500' : 'bg-green-500'
+                                    }`}></span>
+                            </div>
+                            <div>
+                                <h2 className={`text-lg font-bold ${(liveRisk?.riskLevel === 'HIGH' || liveRisk?.riskLevel === 'SEVERE') ? 'text-red-300' :
+                                        liveRisk?.riskLevel === 'MODERATE' ? 'text-amber-300' : 'text-green-300'
+                                    }`}>
+                                    {liveRisk?.riskLevel === 'SEVERE' ? '🚨 SEVERE RISK' :
+                                        liveRisk?.riskLevel === 'HIGH' ? '🚨 HIGH RISK ZONE' :
+                                            liveRisk?.riskLevel === 'MODERATE' ? '⚠️ MODERATE RISK' : '✅ LOW RISK'}
+                                </h2>
+                                <p className="text-xs text-slate-400">
+                                    Live data • {liveRisk?.weather?.source || 'Open-Meteo'} • {liveRisk?.model === 'trained' ? 'ML Model' : 'AI Analysis'}
+                                </p>
+                            </div>
+                        </div>
+                        <p className="text-sm text-slate-300 leading-relaxed">
+                            Flood probability <span className="font-bold" style={{ color: (liveRisk?.riskLevel === 'HIGH' || liveRisk?.riskLevel === 'SEVERE') ? '#f87171' : liveRisk?.riskLevel === 'MODERATE' ? '#fbbf24' : '#4ade80' }}>
+                                {((liveRisk?.probability || 0) * 100).toFixed(0)}%
+                            </span> in your area.
+                            {liveRisk?.weather && (
+                                <> Rain: {liveRisk.weather.rainfall_24h}mm/24h · Temp: {liveRisk.weather.temperature}°C</>
+                            )}
+                        </p>
+                        {liveRisk?.recommendation && (
+                            <p className="text-xs text-slate-400 mt-2 italic">💡 {liveRisk.recommendation}</p>
+                        )}
+                    </div>
+                )}
 
                 {/* Quick Actions */}
                 <div className="grid grid-cols-2 gap-3">

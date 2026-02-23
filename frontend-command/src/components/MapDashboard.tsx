@@ -1,39 +1,22 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { io } from 'socket.io-client';
-import { AlertTriangle, Activity, Droplets, Layers, Radio, Shield, LogOut } from 'lucide-react';
+import { AlertTriangle, Activity, Droplets, Layers, Radio, Shield, LogOut, Loader2, RefreshCw } from 'lucide-react';
+import { fetchRiskPrediction, fetchBulkRisk, type RiskPrediction, type BulkRiskResult } from '@/lib/api';
+import { STATES_DATA } from '@/data/statesData';
 
-// Mock GeoJSON for Risk Zones
-const riskZonesGeoJSON: GeoJSON.FeatureCollection = {
-    type: 'FeatureCollection',
-    features: [
-        {
-            type: 'Feature',
-            properties: { riskLevel: 'HIGH', name: 'South Delhi Flood Plain' },
-            geometry: { type: 'Polygon', coordinates: [[[77.18, 28.52], [77.25, 28.52], [77.25, 28.58], [77.18, 28.58], [77.18, 28.52]]] }
-        },
-        {
-            type: 'Feature',
-            properties: { riskLevel: 'MODERATE', name: 'Yamuna East Bank' },
-            geometry: { type: 'Polygon', coordinates: [[[77.26, 28.60], [77.32, 28.60], [77.32, 28.66], [77.26, 28.66], [77.26, 28.60]]] }
-        },
-        {
-            type: 'Feature',
-            properties: { riskLevel: 'LOW', name: 'West Ridge Corridor' },
-            geometry: { type: 'Polygon', coordinates: [[[77.08, 28.64], [77.16, 28.64], [77.16, 28.70], [77.08, 28.70], [77.08, 28.64]]] }
-        }
-    ]
-};
-
-// Simulated sensor data
-const mockSensors = [
-    { id: 'S1', type: 'RIVER_GAUGE', lat: 28.61, lng: 77.22, value: 204.3 },
-    { id: 'S2', type: 'SOIL_MOISTURE', lat: 28.55, lng: 77.20, value: 0.87 },
-    { id: 'S3', type: 'RAINFALL', lat: 28.68, lng: 77.12, value: 42.5 },
-];
+// Indian flood-prone monitoring points
+const MONITORING_POINTS = STATES_DATA.flatMap(state =>
+    state.districts.map(d => ({
+        name: d.name,
+        state: state.name,
+        lat: state.lat + (Math.random() - 0.5) * 2,
+        lon: state.lng + (Math.random() - 0.5) * 2,
+    }))
+);
 
 export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
     const mapContainer = useRef<HTMLDivElement>(null);
@@ -42,6 +25,10 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
     const [mapStyle, setMapStyle] = useState<'dark' | 'satellite' | 'terrain'>('dark');
     const [showRiskZones, setShowRiskZones] = useState(true);
     const [ndfrStatus] = useState('ACTIVE');
+    const [sensorCount, setSensorCount] = useState(0);
+    const [zoneCount, setZoneCount] = useState(0);
+    const [loadingBulk, setLoadingBulk] = useState(false);
+    const [riskData, setRiskData] = useState<BulkRiskResult[]>([]);
 
     const tileStyles: Record<string, string> = {
         dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -49,105 +36,229 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
         terrain: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
     };
 
+    // Fetch bulk risk data for all monitoring points
+    const loadBulkRisk = useCallback(async () => {
+        setLoadingBulk(true);
+        try {
+            const locations = MONITORING_POINTS.slice(0, 30).map(p => ({
+                lat: p.lat,
+                lon: p.lon,
+                district_name: p.name,
+                state_name: p.state,
+            }));
+            const results = await fetchBulkRisk(locations);
+            setRiskData(results);
+            setSensorCount(results.length);
+            setZoneCount(results.filter(r => r.risk_level === 'HIGH' || r.risk_level === 'SEVERE').length);
+
+            // Add to telemetry log
+            results.forEach(r => {
+                if(r.risk_level === 'HIGH' || r.risk_level === 'SEVERE') {
+                    setAlerts(prev => [
+                        `[${new Date().toLocaleTimeString()}] ${r.district}, ${r.state} → ${r.risk_level} (${r.risk_score})`,
+                        ...prev.slice(0, 49)
+                    ]);
+                }
+            });
+        } catch(e) {
+            console.error('Bulk risk fetch failed:', e);
+        } finally {
+            setLoadingBulk(false);
+        }
+    }, []);
+
+    // Map initialization
     useEffect(() => {
-        if (!mapContainer.current || map.current) return;
+        if(!mapContainer.current || map.current) return;
 
         map.current = new maplibregl.Map({
             container: mapContainer.current,
             style: tileStyles[mapStyle],
-            center: [77.2090, 28.6139],
-            zoom: 10,
+            center: [82.5, 23.0], // Center of India
+            zoom: 5,
         });
 
         const m = map.current;
-
         m.addControl(new maplibregl.NavigationControl(), 'bottom-right');
         m.addControl(new maplibregl.ScaleControl({}), 'bottom-left');
 
-        m.on('load', () => {
-            // Risk Zones
-            m.addSource('risk-zones', { type: 'geojson', data: riskZonesGeoJSON });
-            m.addLayer({
-                id: 'risk-fill',
-                type: 'fill',
-                source: 'risk-zones',
-                paint: {
-                    'fill-color': [
-                        'match', ['get', 'riskLevel'],
-                        'HIGH', '#ef4444',
-                        'MODERATE', '#f59e0b',
-                        'LOW', '#22c55e',
-                        '#94a3b8'
-                    ],
-                    'fill-opacity': 0.45,
-                }
-            });
-            m.addLayer({
-                id: 'risk-outline',
-                type: 'line',
-                source: 'risk-zones',
-                paint: {
-                    'line-color': [
-                        'match', ['get', 'riskLevel'],
-                        'HIGH', '#dc2626',
-                        'MODERATE', '#d97706',
-                        'LOW', '#16a34a',
-                        '#64748b'
-                    ],
-                    'line-width': 2,
-                }
-            });
+        // Click anywhere on map to get live prediction
+        m.on('click', async (e) => {
+            const { lat, lng } = e.lngLat;
+            const popup = new maplibregl.Popup({ maxWidth: '320px' })
+                .setLngLat(e.lngLat)
+                .setHTML(`<div style="font-family:monospace;font-size:12px;color:#94a3b8;padding:8px;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <div style="width:14px;height:14px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>
+                        Analyzing ${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E...
+                    </div>
+                    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+                </div>`)
+                .addTo(m);
 
-            // Sensor Markers
-            mockSensors.forEach(sensor => {
-                const color = sensor.type === 'RIVER_GAUGE' ? '#3b82f6' : sensor.type === 'RAINFALL' ? '#8b5cf6' : '#10b981';
-                new maplibregl.Marker({ color })
-                    .setLngLat([sensor.lng, sensor.lat])
-                    .setPopup(new maplibregl.Popup().setHTML(
-                        `<div style="font-family:monospace;font-size:12px;"><strong>${sensor.id}</strong><br/>Type: ${sensor.type}<br/>Value: ${sensor.value}</div>`
-                    ))
-                    .addTo(m);
-            });
+            try {
+                const data = await fetchRiskPrediction(lat, lng);
+                const riskColor = data.riskLevel === 'HIGH' || data.riskLevel === 'SEVERE' ? '#ef4444' :
+                    data.riskLevel === 'MODERATE' ? '#f59e0b' : '#22c55e';
 
-            // Zone click popup
-            m.on('click', 'risk-fill', (e) => {
-                if (!e.features || e.features.length === 0) return;
-                const props = e.features[0].properties;
-                new maplibregl.Popup()
-                    .setLngLat(e.lngLat)
-                    .setHTML(`<div style="font-family:monospace;font-size:12px;"><strong>${props?.name}</strong><br/>Risk: <span style="color:${props?.riskLevel === 'HIGH' ? 'red' : props?.riskLevel === 'MODERATE' ? 'orange' : 'green'}">${props?.riskLevel}</span></div>`)
-                    .addTo(m);
-            });
+                popup.setHTML(`
+                    <div style="font-family:system-ui;font-size:12px;min-width:240px;">
+                        <div style="background:${riskColor}22;border:1px solid ${riskColor}44;border-radius:8px;padding:10px;margin-bottom:8px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <strong style="color:${riskColor};font-size:14px;">${data.riskLevel} RISK</strong>
+                                <span style="color:${riskColor};font-size:16px;font-weight:bold;">${data.riskScore}/10</span>
+                            </div>
+                            <div style="color:#94a3b8;font-size:10px;margin-top:4px;">
+                                Flood probability: ${((data.probability || 0) * 100).toFixed(0)}%
+                            </div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                            <div style="background:#1e293b;border-radius:6px;padding:6px;text-align:center;">
+                                <div style="color:#64748b;font-size:9px;">RAIN 24H</div>
+                                <div style="color:#60a5fa;font-weight:bold;">${data.weather?.rainfall_24h || 0}mm</div>
+                            </div>
+                            <div style="background:#1e293b;border-radius:6px;padding:6px;text-align:center;">
+                                <div style="color:#64748b;font-size:9px;">TEMP</div>
+                                <div style="color:#fbbf24;font-weight:bold;">${data.weather?.temperature || 0}°C</div>
+                            </div>
+                            <div style="background:#1e293b;border-radius:6px;padding:6px;text-align:center;">
+                                <div style="color:#64748b;font-size:9px;">SOIL MOIST</div>
+                                <div style="color:#34d399;font-weight:bold;">${((data.weather?.soil_moisture || 0) * 100).toFixed(0)}%</div>
+                            </div>
+                            <div style="background:#1e293b;border-radius:6px;padding:6px;text-align:center;">
+                                <div style="color:#64748b;font-size:9px;">DISCHARGE</div>
+                                <div style="color:#a78bfa;font-weight:bold;">${data.discharge?.current_discharge?.toFixed(1) || 0} m³/s</div>
+                            </div>
+                        </div>
+                        <div style="color:#475569;font-size:9px;margin-top:6px;text-align:right;">
+                            📡 ${data.model === 'trained' ? 'ML Model' : 'AI Analysis'} · ${data.weather?.source || 'Open-Meteo'}
+                        </div>
+                    </div>
+                `);
 
-            m.on('mouseenter', 'risk-fill', () => { m.getCanvas().style.cursor = 'pointer'; });
-            m.on('mouseleave', 'risk-fill', () => { m.getCanvas().style.cursor = ''; });
+                // Log to telemetry
+                setAlerts(prev => [
+                    `[${new Date().toLocaleTimeString()}] Click ${lat.toFixed(2)},${lng.toFixed(2)} → ${data.riskLevel} (${data.riskScore})`,
+                    ...prev.slice(0, 49)
+                ]);
+            } catch(err) {
+                popup.setHTML(`<div style="font-family:monospace;font-size:12px;color:#ef4444;padding:8px;">
+                    ⚠️ Failed to fetch data for this location
+                </div>`);
+            }
         });
+
+        m.on('mouseenter', 'risk-markers', () => { m.getCanvas().style.cursor = 'pointer'; });
+        m.on('mouseleave', 'risk-markers', () => { m.getCanvas().style.cursor = ''; });
 
         return () => { m.remove(); map.current = null; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Add risk markers when data changes
+    useEffect(() => {
+        if(!map.current || !map.current.isStyleLoaded() || riskData.length === 0) return;
+        const m = map.current;
+
+        // Remove existing source/layers
+        try {
+            if(m.getLayer('risk-markers-circle')) m.removeLayer('risk-markers-circle');
+            if(m.getLayer('risk-markers-label')) m.removeLayer('risk-markers-label');
+            if(m.getSource('risk-markers')) m.removeSource('risk-markers');
+        } catch { /* ignore */ }
+
+        const geojson: GeoJSON.FeatureCollection = {
+            type: 'FeatureCollection',
+            features: riskData.filter(r => !r.error).map(r => ({
+                type: 'Feature' as const,
+                properties: {
+                    risk_level: r.risk_level,
+                    risk_score: r.risk_score,
+                    name: r.district || '',
+                    rainfall: r.rainfall_24h,
+                },
+                geometry: {
+                    type: 'Point' as const,
+                    coordinates: [r.lon, r.lat]
+                }
+            }))
+        };
+
+        m.addSource('risk-markers', { type: 'geojson', data: geojson });
+
+        m.addLayer({
+            id: 'risk-markers-circle',
+            type: 'circle',
+            source: 'risk-markers',
+            paint: {
+                'circle-radius': [
+                    'interpolate', ['linear'], ['get', 'risk_score'],
+                    0, 6, 5, 10, 10, 18
+                ],
+                'circle-color': [
+                    'match', ['get', 'risk_level'],
+                    'SEVERE', '#dc2626',
+                    'HIGH', '#ef4444',
+                    'MODERATE', '#f59e0b',
+                    '#22c55e'
+                ],
+                'circle-opacity': 0.7,
+                'circle-stroke-width': 2,
+                'circle-stroke-color': [
+                    'match', ['get', 'risk_level'],
+                    'SEVERE', '#fca5a5',
+                    'HIGH', '#fca5a5',
+                    'MODERATE', '#fde68a',
+                    '#86efac'
+                ],
+                'circle-stroke-opacity': 0.9,
+            }
+        });
+
+        m.addLayer({
+            id: 'risk-markers-label',
+            type: 'symbol',
+            source: 'risk-markers',
+            layout: {
+                'text-field': ['get', 'name'],
+                'text-size': 10,
+                'text-offset': [0, 1.8],
+                'text-anchor': 'top',
+            },
+            paint: {
+                'text-color': '#94a3b8',
+                'text-halo-color': '#0f172a',
+                'text-halo-width': 1,
+            }
+        });
+    }, [riskData]);
+
+    // Load bulk data on mount
+    useEffect(() => {
+        loadBulkRisk();
+        const interval = setInterval(loadBulkRisk, 10 * 60 * 1000); // refresh every 10min
+        return () => clearInterval(interval);
+    }, [loadBulkRisk]);
+
     // Toggle risk zone visibility
     useEffect(() => {
-        if (!map.current || !map.current.isStyleLoaded()) return;
+        if(!map.current || !map.current.isStyleLoaded()) return;
         const visibility = showRiskZones ? 'visible' : 'none';
         try {
-            if (map.current.getLayer('risk-fill')) {
-                map.current.setLayoutProperty('risk-fill', 'visibility', visibility);
-            }
-            if (map.current.getLayer('risk-outline')) {
-                map.current.setLayoutProperty('risk-outline', 'visibility', visibility);
-            }
-        } catch { /* layers might not be ready yet */ }
+            if(map.current.getLayer('risk-markers-circle'))
+                map.current.setLayoutProperty('risk-markers-circle', 'visibility', visibility);
+            if(map.current.getLayer('risk-markers-label'))
+                map.current.setLayoutProperty('risk-markers-label', 'visibility', visibility);
+        } catch { /* not ready */ }
     }, [showRiskZones]);
 
     // WebSocket connection
     useEffect(() => {
-        const socket = io('http://localhost:4000');
-        socket.emit('subscribe_telemetry', 'D1');
+        const socket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000');
+        socket.emit('subscribe_telemetry', 'ALL');
         socket.on('risk_update', (data) => {
             setAlerts(prev => [
-                `[${new Date(data.timestamp).toLocaleTimeString()}] Zone ${data.districtId} → ${data.riskLevel} (Score: ${data.riskScore})`,
+                `[${new Date(data.timestamp).toLocaleTimeString()}] ${data.districtId} → ${data.riskLevel} (${data.riskScore})`,
                 ...prev.slice(0, 49)
             ]);
         });
@@ -157,8 +268,12 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
     // Change map style
     const switchStyle = (style: 'dark' | 'satellite' | 'terrain') => {
         setMapStyle(style);
-        if (map.current) {
+        if(map.current) {
             map.current.setStyle(tileStyles[style]);
+            // Reload markers after style change
+            map.current.once('style.load', () => {
+                if(riskData.length > 0) setRiskData([...riskData]);
+            });
         }
     };
 
@@ -196,14 +311,19 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                             <div className="bg-slate-800/60 rounded-lg p-2 text-center">
-                                <div className="text-slate-500">Sensors</div>
-                                <div className="font-mono font-bold text-blue-300">{mockSensors.length}</div>
+                                <div className="text-slate-500">Monitoring</div>
+                                <div className="font-mono font-bold text-blue-300">{sensorCount || '...'}</div>
                             </div>
                             <div className="bg-slate-800/60 rounded-lg p-2 text-center">
-                                <div className="text-slate-500">Risk Zones</div>
-                                <div className="font-mono font-bold text-amber-300">{riskZonesGeoJSON.features.length}</div>
+                                <div className="text-slate-500">High Risk</div>
+                                <div className="font-mono font-bold text-red-400">{zoneCount || '0'}</div>
                             </div>
                         </div>
+                        <button onClick={loadBulkRisk} disabled={loadingBulk}
+                            className="mt-2 w-full text-[10px] uppercase font-bold py-1.5 rounded-md bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50">
+                            {loadingBulk ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                            {loadingBulk ? 'Analyzing...' : 'Refresh Live Data'}
+                        </button>
                     </div>
                 </div>
 
@@ -224,7 +344,7 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
                     {/* Risk Toggle */}
                     <button onClick={() => setShowRiskZones(!showRiskZones)}
                         className={`mt-2 w-full text-[10px] uppercase font-bold py-1.5 rounded-md transition-all ${showRiskZones ? 'bg-red-600/80 text-white' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'}`}>
-                        {showRiskZones ? '🔴 Risk Zones: ON' : '⚪ Risk Zones: OFF'}
+                        {showRiskZones ? '🔴 Risk Markers: ON' : '⚪ Risk Markers: OFF'}
                     </button>
                 </div>
 
@@ -237,7 +357,7 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
                         {alerts.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-full text-slate-600">
                                 <Activity className="w-8 h-8 mb-2 animate-pulse" />
-                                <p className="text-xs font-mono">Awaiting stream data...</p>
+                                <p className="text-xs font-mono">Click map or wait for live data...</p>
                             </div>
                         ) : null}
                         {alerts.map((msg, i) => (
@@ -256,7 +376,7 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
                             <LogOut className="w-3.5 h-3.5" /> Logout
                         </button>
                     )}
-                    <p className="text-[9px] text-slate-600 font-mono text-center">FloodSense AI v1.0 • NDRF Operations</p>
+                    <p className="text-[9px] text-slate-600 font-mono text-center">FloodSense AI v2.0 • NDRF Ops • Real Data</p>
                 </div>
             </div>
 
@@ -264,38 +384,36 @@ export default function MapDashboard({ onLogout }: { onLogout?: () => void }) {
             <div className="flex-1 relative">
                 <div ref={mapContainer} className="w-full h-full" />
 
+                {/* Loading overlay */}
+                {loadingBulk && (
+                    <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-slate-800/90 backdrop-blur-sm rounded-xl px-4 py-2 border border-blue-500/30 flex items-center gap-2 z-20">
+                        <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                        <span className="text-xs text-blue-300 font-mono">Fetching live weather data...</span>
+                    </div>
+                )}
+
                 {/* Legend Overlay */}
                 <div className="absolute top-4 right-4 bg-slate-800/90 backdrop-blur-sm rounded-xl p-3 border border-slate-700/50 shadow-xl">
-                    <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-2">Risk Legend</h3>
+                    <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-2">Risk Legend (Live)</h3>
                     <div className="space-y-1.5">
                         <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-sm bg-red-500"></span>
-                            <span className="text-[11px] text-slate-300">High Risk</span>
+                            <span className="w-3 h-3 rounded-full bg-red-500"></span>
+                            <span className="text-[11px] text-slate-300">High/Severe Risk</span>
                         </div>
                         <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-sm bg-amber-500"></span>
+                            <span className="w-3 h-3 rounded-full bg-amber-500"></span>
                             <span className="text-[11px] text-slate-300">Moderate Risk</span>
                         </div>
                         <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-sm bg-green-500"></span>
+                            <span className="w-3 h-3 rounded-full bg-green-500"></span>
                             <span className="text-[11px] text-slate-300">Low Risk</span>
                         </div>
                     </div>
                     <hr className="border-slate-700/50 my-2" />
-                    <h3 className="text-[10px] uppercase font-bold text-slate-400 mb-1.5">Sensors</h3>
-                    <div className="space-y-1.5">
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-full bg-blue-500"></span>
-                            <span className="text-[11px] text-slate-300">River Gauge</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-full bg-purple-500"></span>
-                            <span className="text-[11px] text-slate-300">Rainfall</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
-                            <span className="text-[11px] text-slate-300">Soil Moisture</span>
-                        </div>
+                    <div className="text-[9px] text-slate-500 space-y-0.5">
+                        <p>📡 Source: Open-Meteo API</p>
+                        <p>🖱️ Click anywhere for prediction</p>
+                        <p>🔄 Auto-refresh: 10 min</p>
                     </div>
                 </div>
             </div>

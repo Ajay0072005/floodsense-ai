@@ -2,3 +2,9 @@ fastapi
 uvicorn
 pydantic
 requests
+httpx
+scikit-learn
+xgboost
+joblib
+pandas
+numpy
