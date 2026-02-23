@@ -196,6 +196,12 @@ export default function AuthPage({ onLogin }: AuthFormProps) {
                                         <CheckCircle className="w-4 h-4 text-green-600" />
                                         <span className="text-xs text-green-700">OTP sent to <strong>+91 {phone}</strong></span>
                                     </div>
+                                    {/* Show simulated OTP visibly */}
+                                    <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg px-4 py-3 text-center">
+                                        <p className="text-[10px] text-yellow-700 font-bold uppercase tracking-wide mb-1">📩 Simulated SMS (Demo Mode)</p>
+                                        <p className="text-2xl font-black tracking-[0.3em] text-[#1a237e]">{generatedOtp}</p>
+                                        <p className="text-[9px] text-yellow-600 mt-1">In production, this would be sent via SMS gateway</p>
+                                    </div>
 
                                     {/* 6-digit OTP Input */}
                                     <div>
