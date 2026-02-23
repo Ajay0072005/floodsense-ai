@@ -3,8 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
 }
 
 enum Role {
@@ -13,6 +12,7 @@ enum Role {
 }
 
 enum RiskLevel {
+  SEVERE
   HIGH
   MODERATE
   LOW
@@ -24,42 +24,75 @@ model User {
   fullName  String?
   state     String?
   district  String?
-  role      Role     @default(CITIZEN)
+  role      String   @default("CITIZEN")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
+
   alerts    Alert[]
+  reports   CitizenReport[]
 }
 
 model RiskZone {
-  id          String    @id @default(uuid())
+  id          String  @id @default(uuid())
   zoneName    String
-  riskLevel   RiskLevel
+  riskLevel   String  @default("LOW")
   centroidLat Float
   centroidLng Float
-  geoJsonData Json?     // For storing detailed border polygons
-  
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  geoJsonData String? // JSON string for border polygons
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Telemetry {
-  id             String   @id @default(uuid())
-  sensorId       String
-  sensorType     String   // "RIVER_GAUGE", "SOIL_MOISTURE", "RAINFALL"
-  readingValue   Float
-  lat            Float
-  lng            Float
-  recordedAt     DateTime @default(now())
+  id           String   @id @default(uuid())
+  sensorId     String
+  sensorType   String   // RIVER_GAUGE, SOIL_MOISTURE, RAINFALL
+  readingValue Float
+  lat          Float
+  lng          Float
+  recordedAt   DateTime @default(now())
 }
 
 model Alert {
   id          String   @id @default(uuid())
   userId      String
   message     String
-  severity    String
+  severity    String   @default("LOW")
+  alertType   String   @default("GENERAL")
+  lat         Float?
+  lon         Float?
   isDelivered Boolean  @default(false)
   createdAt   DateTime @default(now())
-  
-  user        User     @relation(fields: [userId], references: [id])
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model CitizenReport {
+  id          String   @id @default(uuid())
+  userId      String
+  reportType  String   // FLOOD, DRAIN_BLOCK, ROAD_BLOCK, RESCUE_NEEDED
+  description String
+  lat         Float
+  lon         Float
+  photoUrl    String?
+  severity    String   @default("MODERATE")
+  status      String   @default("PENDING") // PENDING, ACKNOWLEDGED, RESOLVED
+  upvotes     Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model PredictionLog {
+  id          String   @id @default(uuid())
+  lat         Float
+  lon         Float
+  riskLevel   String
+  riskScore   Float
+  probability Float
+  model       String   @default("xgboost")
+  weather     String?  // JSON string
+  createdAt   DateTime @default(now())
 }
