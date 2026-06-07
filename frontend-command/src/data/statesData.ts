@@ -138,7 +138,6 @@ export const STATES_DATA: StateData[] = [
             { name: "New Delhi", riskLevel: "LOW", riskScore: 3.0, population: 142004, rainfall: 120, waterLevel: 2.5, shelters: 10, lat: 28.61, lng: 77.21, vulnerability: vulnScore({ elderly_pct: 9.0, children_pct: 18, disabled_pct: 1.5, ews_pct: 12, density_per_sqkm: 6500 }), drainageHealth: "GOOD" },
         ]
     },
-,
     {
         name: "Odisha", code: "OD", lat: 20.9517, lng: 85.0985,
         districts: [
