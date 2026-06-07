@@ -1,164 +1,136 @@
-# 🌊 FloodSense-AI
+# FloodSense AI
 
-**Real-Time Indian Flood Prediction & Alert System**
+## Problem Statement
 
-> Production-ready flood forecasting platform using live Open-Meteo weather data, ML-based risk prediction, and real-time alerts for Indian states and districts.
+India’s flood-prone regions need a reliable way to detect flash floods early, share that risk with local communities, and help first responders act before disaster escalates. Existing alert systems are often slow, disconnected, and lack a unified flow from sensors to citizens to command centers.
 
-![Architecture](https://img.shields.io/badge/Architecture-Microservices-blue) ![Data](https://img.shields.io/badge/Data-Real_Time-green) ![API](https://img.shields.io/badge/API-Open_Meteo-orange) ![ML](https://img.shields.io/badge/ML-XGBoost-red)
+This project solves that gap by connecting weather data, machine learning, real-time alerts, and rescue response into one working prototype.
 
----
+## What this project does
 
-## 🏗️ Architecture
+FloodSense AI is built to:
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Next.js 16    │────▶│  Express API    │────▶│  FastAPI + ML   │
-│   Frontend      │     │  Backend        │     │  AI Cortex      │
-│   :3000         │     │  :4000          │     │  :8000          │
-└─────────────────┘     └────────┬────────┘     └────────┬────────┘
-                                 │                        │
-                        ┌────────▼────────┐     ┌────────▼────────┐
-                        │  PostgreSQL     │     │  Open-Meteo API │
-                        │  Database       │     │  (Free, No Key) │
-                        └─────────────────┘     └─────────────────┘
-```
+- collect weather and hydrology signals from Open-Meteo and local telemetry,
+- run a flood risk prediction engine with ML + fallback rules,
+- present a citizen-facing dashboard for alerts and evacuation guidance,
+- provide a command interface for NDRF / authority operators,
+- keep the system working even when one service fails.
 
-## ⚡ Quick Start
+## Why this is important
 
-### Option 1: One-Click (Windows)
+Floods are one of the leading natural disasters in India, affecting millions every year. A practical, real-time platform like FloodSense can reduce response time, help people evacuate safely, and give emergency teams a clear situational picture.
+
+## Solution Overview
+
+FloodSense AI is a three-layer system:
+
+1. **Frontend:** a Next.js dashboard for citizens and NDRF command users.
+2. **Backend:** an Express API with Socket.IO for realtime updates and proxying.
+3. **AI Cortex:** a Python-based predictive service that combines weather inputs and an ML model.
+
+The frontend does not rely on a single data source. It prefers the backend, falls back to a dedicated AI Cortex, and can still use direct weather API data if needed.
+
+## Tech Stack
+
+- **Frontend:** Next.js 16, React 19, Tailwind-style CSS, MapLibre GL, Socket.IO client
+- **Backend:** Node.js, Express, Socket.IO, SQLite / Prisma, rate limiting, JWT auth
+- **AI Cortex:** Python FastAPI, scikit-learn / XGBoost-style ML, Open-Meteo integration
+- **Data:** Open-Meteo free weather API, local telemetry simulation, user reports, alert generation
+- **Deployment:** Docker Compose, standalone containers, local dev scripts
+
+## How the build is structured
+
+### Frontend
+
+- `frontend-command/src/app/page.tsx` — entrypoint that switches between citizen and authority experience
+- `frontend-command/src/components/AuthPage.tsx` — login/signup flow with OTP-style interaction
+- `frontend-command/src/components/CitizenDashboard.tsx` — citizen UI for alerts, evacuation, shelters, and local risk
+- `frontend-command/src/components/MapDashboard.tsx` — authority map console with live markers and telemetry
+- `frontend-command/src/lib/api.ts` — centralized API client with backend / AI Cortex / fallback logic
+
+### Backend
+
+- `backend/index.ts` — Express API server, health checks, auth flow, risk prediction proxy, mobile and map endpoints
+- `backend/prisma.config.ts` — Prisma configuration and schema entrypoint
+- `backend/package.json` — dependencies and scripts for build and development
+
+### AI Cortex
+
+- `ai-cortex/main.py` — prediction API endpoints and weather integration
+- `ai-cortex/ml/model.py` — risk model and prediction logic
+- `ai-cortex/ml/train.py` — training script to generate a model
+- `ai-cortex/services/` — weather and alert service helpers
+
+## How to run it
+
+### Local development
+
 ```bash
-start.cmd
+cd floodsense-ai
 ```
 
-### Option 2: Docker Compose
-```bash
-docker-compose up --build
-```
+1. Start the AI Cortex service:
 
-### Option 3: Manual
 ```bash
-# Terminal 1 — AI Cortex
 cd ai-cortex
-pip install -r requirements.txt
-python ml/train.py              # Train ML model (one-time)
-uvicorn main:app --reload --port 8000
+python -m pip install -r requirements.txt
+python main.py
+```
 
-# Terminal 2 — Backend
-cd backend
-npm install
-npx ts-node index.ts
+2. Start the backend API:
 
-# Terminal 3 — Frontend
-cd frontend-command
+```bash
+cd ../backend
 npm install
 npm run dev
 ```
 
-Open **http://localhost:3000** in your browser.
+3. Start the frontend:
 
----
-
-## 📡 Data Sources
-
-| Source | Data | Cost | Latency |
-|--------|------|------|---------|
-| **Open-Meteo** | Rainfall, soil moisture, temperature, discharge | Free, no key | Real-time |
-| **NDMA SACHET** | Official disaster alerts (planned) | Free | 15-30 min |
-| **CWC India-WRIS** | River gauge data (planned) | Free | 1-6 hrs |
-
-## 🧠 ML Model
-
-- **Algorithm**: XGBoost Regressor (200 estimators, depth 6)
-- **Features**: rainfall_24h, rainfall_7d, soil_moisture, river_discharge, humidity, temperature, wind_speed, weather_code
-- **Training**: Synthetic data modeled on INDOFLOODS patterns (5000 samples)
-- **Fallback**: Physics-based rule engine when model unavailable
-- **Output**: Flood probability (0-1), Risk level (LOW/MODERATE/HIGH/SEVERE), Risk score (0-10)
-
-Train the model:
 ```bash
-cd ai-cortex && python ml/train.py
+cd ../frontend-command
+npm install
+npm run dev
 ```
 
-## 🔌 API Endpoints
+Open the browser at `http://localhost:3000`.
 
-### AI Cortex (:8000)
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Service health check |
-| `/predict` | POST | ML flood risk prediction |
-| `/weather?lat=&lon=` | GET | Real-time weather data |
-| `/discharge?lat=&lon=` | GET | River discharge data |
-| `/alerts?lat=&lon=` | GET | Flood alerts for location |
-| `/predict/bulk` | POST | Bulk predictions (map) |
+### Quick start with Docker
 
-### Backend (:4000)
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | API health check |
-| `/auth/signup` | POST | User registration |
-| `/auth/login` | POST | User authentication |
-| `/risk/calculate` | POST | Proxied risk prediction |
-| `/api/weather/:lat/:lon` | GET | Weather proxy |
-| `/api/alerts/:lat/:lon` | GET | Alerts proxy |
-| `/api/predict/bulk` | POST | Bulk prediction proxy |
-
-## 🖥️ Frontend Features
-
-- **Citizen Dashboard**: Live risk card, real flood probability, evacuation routes, SOS alerts, family notification, state/district analysis with 10+ Indian states
-- **NDRF Command Map**: Click-anywhere live predictions, bulk risk visualization, auto-refreshing markers, real-time telemetry feed
-- **22 Indian Language Support**: Hindi, Bengali, Telugu, Tamil, Marathi, and more
-- **3-Tier Fallback**: Backend → AI Cortex → Direct Open-Meteo (works even if servers are down)
-
-## 📁 Project Structure
-
-```
-floodsense-ai/
-├── ai-cortex/                 # Python ML Engine
-│   ├── main.py                # FastAPI endpoints
-│   ├── services/
-│   │   ├── weather_service.py # Open-Meteo integration
-│   │   └── alert_service.py   # Alert generation
-│   ├── ml/
-│   │   ├── model.py           # ML prediction engine
-│   │   └── train.py           # Model training script
-│   ├── requirements.txt
-│   └── Dockerfile
-├── backend/                   # Node.js API Server
-│   ├── index.ts               # Express + Socket.IO
-│   ├── prisma/schema.prisma   # Database schema
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── Dockerfile
-├── frontend-command/          # Next.js Frontend
-│   ├── src/
-│   │   ├── app/               # Next.js pages
-│   │   ├── components/        # React components
-│   │   ├── data/statesData.ts # Indian states data
-│   │   └── lib/api.ts         # API client (3-tier fallback)
-│   ├── package.json
-│   └── Dockerfile
-├── docker-compose.yml         # Full stack orchestration
-├── start.cmd                  # Windows one-click start
-├── start.sh                   # Linux/Mac start
-└── README.md
-```
-
-## 🔧 Environment Variables
-
-Copy the example files and adjust:
 ```bash
-cp backend/.env.example backend/.env
-cp frontend-command/.env.local.example frontend-command/.env.local
+docker-compose up --build
 ```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | 4000 | Backend port |
-| `AI_CORTEX_URL` | http://localhost:8000 | AI Cortex URL |
-| `DATABASE_URL` | postgresql://... | PostgreSQL connection |
-| `NEXT_PUBLIC_API_URL` | http://localhost:4000 | Frontend → Backend |
-| `NEXT_PUBLIC_AI_CORTEX_URL` | http://localhost:8000 | Frontend → AI Cortex |
+If you want a Windows shortcut, use `start.cmd`.
 
-## 📄 License
+## Expected Impact
 
-MIT License — Built for India's flood resilience.
+FloodSense AI is designed to deliver:
+
+- faster local warnings for citizens during flash floods,
+- better coordination for NDRF and district authorities,
+- more trustworthy evacuation guidance based on live weather and risk scores,
+- resilience through fallback logic when a service becomes unavailable.
+
+It is not just a demo — it is a prototype for a working early-warning system.
+
+## Important details
+
+- The system is built to work even if the backend or AI Cortex becomes unreachable.
+- The frontend shows live risk, alerts, evacuation help, SOS triggers, and area dashboards.
+- The backend supports both user-facing and map-focused endpoints.
+- The AI Cortex can be extended with real river gauge feeds, NDMA alerts, or additional hydrology models.
+
+## Next steps
+
+A human reviewer should verify the following for production readiness:
+
+- real database credentials and access control,
+- OTP/security flow with a proper SMS provider,
+- live hydrology / river gauge feeds,
+- localization to state/district languages,
+- mobile-friendly UI polish.
+
+## License
+
+MIT — built to help India become more flood resilient.
